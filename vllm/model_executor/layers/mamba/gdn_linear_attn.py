@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Inference-only Qwen3-Next/Qwen3.5 model."""
 
+import os
 import torch
 from einops import rearrange
 from torch import nn
@@ -139,12 +140,18 @@ class ChunkGatedDeltaRule(CustomOp):
         assert isinstance(additional_config, dict)
         backend_cfg = additional_config.get("gdn_prefill_backend", "auto")
         backend = str(backend_cfg).strip().lower()
+        disable_flashinfer_gdn = (
+            os.environ.get("VLLM_QWEN3_NEXT_DISABLE_FLASHINFER_GDN", "").lower()
+            in ("1", "true", "yes", "on")
+        )
 
         supports_flashinfer = (
             current_platform.is_cuda() and current_platform.is_device_capability(90)
         )
 
-        if backend == "flashinfer":
+        if disable_flashinfer_gdn:
+            use_flashinfer = False
+        elif backend == "flashinfer":
             use_flashinfer = supports_flashinfer
             if not use_flashinfer:
                 logger.warning_once(
@@ -165,7 +172,13 @@ class ChunkGatedDeltaRule(CustomOp):
                 "avoid JIT compile time.",
             )
         else:
-            logger.info_once("Using Triton/FLA GDN prefill kernel")
+            if disable_flashinfer_gdn:
+                logger.info_once(
+                    "Using Triton/FLA GDN prefill kernel because "
+                    "VLLM_QWEN3_NEXT_DISABLE_FLASHINFER_GDN is set"
+                )
+            else:
+                logger.info_once("Using Triton/FLA GDN prefill kernel")
 
         self._forward_method = (
             self.forward_cuda if use_flashinfer else self.forward_native
